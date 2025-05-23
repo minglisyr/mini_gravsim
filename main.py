@@ -4,16 +4,12 @@ import random
 from typing import List, Tuple, Optional
 
 # Constants
-PARTICLE_COUNT = 500
-PARTICLE_RADIUS = 4
-PARTICLE_SPEED = 5
-SPLIT_THRESHOLD = 10
-BOUNCE_DAMPING = 0.99
-G = 1.0  # Gravitational constant 
-BLACK_HOLE_MASS = 400
-BLACK_HOLE_RADIUS = 20  # Larger radius for visibility
-MIN_BLACK_HOLE_DISTANCE = BLACK_HOLE_RADIUS      # Minimum distance for force calculation with black hole
-MIN_PARTICLE_DISTANCE = PARTICLE_RADIUS  # Minimum distance for force calculation between particles
+PARTICLE_COUNT = 400
+PARTICLE_RADIUS = 3
+PARTICLE_SPEED = 1
+SPLIT_THRESHOLD = 100
+G = 0.1  # Gravitational constant 
+MIN_PARTICLE_DISTANCE = PARTICLE_RADIUS * 2  # Minimum distance for force calculation between particles
 
 # Get screen info
 pygame.init()
@@ -24,7 +20,6 @@ WIDTH, HEIGHT = screen_info.current_w, screen_info.current_h
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 YELLOW = (255, 255, 0)  # Color for text display
-PURPLE = (128, 0, 128)  # Color for black hole
 BLUE = (0, 0, 255)     # Color for slowest particles
 RED = (255, 0, 0)      # Color for fastest particles
 
@@ -41,35 +36,6 @@ def get_velocity_color(vx: float, vy: float) -> Tuple[int, int, int]:
     g = 0
     return (r, g, b)
 
-class BlackHole:
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-        self.mass = BLACK_HOLE_MASS
-    
-    def draw(self, screen):
-        # Create a single surface for both glow and core
-        max_glow_radius = int(BLACK_HOLE_RADIUS * 1.5)
-        surface_size = max_glow_radius * 2
-        glow_surface = pygame.Surface((surface_size, surface_size), pygame.SRCALPHA)
-        
-        # Draw multiple glow layers with decreasing alpha
-        num_layers = 8
-        for i in range(num_layers, 0, -1):
-            radius = BLACK_HOLE_RADIUS * (1 + (0.5 * i / num_layers))
-            alpha = int(255 * (1 - (i / num_layers)) * 0.5)  # 50% max opacity
-            pygame.draw.circle(glow_surface, (128, 0, 128, alpha),
-                             (max_glow_radius, max_glow_radius), int(radius))
-        
-        # Draw the core on top
-        pygame.draw.circle(glow_surface, PURPLE,
-                         (max_glow_radius, max_glow_radius), BLACK_HOLE_RADIUS)
-        
-        # Blit the entire surface
-        screen.blit(glow_surface,
-                   (int(self.x - max_glow_radius),
-                    int(self.y - max_glow_radius)))
-
 class Particle:
     def __init__(self, x, y, vx, vy, mass):
         self.x = x
@@ -77,7 +43,6 @@ class Particle:
         self.vx = vx
         self.vy = vy
         self.mass = mass
-        self.is_captured = False  # Track if particle is currently captured
 
     def apply_force(self, fx, fy):
         self.vx += fx
@@ -92,10 +57,16 @@ class Particle:
         pygame.draw.circle(screen, color, (int(self.x), int(self.y)), PARTICLE_RADIUS)
 
     def check_boundary_collision(self):
-        if self.x < 0 or self.x > WIDTH:
-            self.vx *= -BOUNCE_DAMPING
-        if self.y < 0 or self.y > HEIGHT:
-            self.vy *= -BOUNCE_DAMPING
+        # Wrap around horizontally
+        if self.x < 0:
+            self.x = WIDTH
+        elif self.x > WIDTH:
+            self.x = 0
+        # Wrap around vertically
+        if self.y < 0:
+            self.y = HEIGHT
+        elif self.y > HEIGHT:
+            self.y = 0
 
     def get_kinetic_energy(self) -> float:
         """Calculate the kinetic energy of the particle."""
@@ -207,33 +178,15 @@ class QuadTree:
             if child:
                 child.draw(screen)
 
-def compute_gravitational_force(p1: Particle, p2: Particle, black_hole: BlackHole = None) -> tuple[float, float]:
-    """Compute gravitational force between particles and black hole if provided."""
-    total_fx, total_fy = 0, 0
-    
-    # Force between particles
-    if p2 is not None:
-        dx = p2.x - p1.x
-        dy = p2.y - p1.y
-        r = math.sqrt(dx ** 2 + dy ** 2)
-        # Apply minimum distance threshold for particle interactions
-        r = max(r, MIN_PARTICLE_DISTANCE)
-        force = G / (r ** 2)
-        total_fx += force * dx / r
-        total_fy += force * dy / r
-    
-    # Force from black hole
-    if black_hole is not None:
-        dx = black_hole.x - p1.x
-        dy = black_hole.y - p1.y
-        r = math.sqrt(dx ** 2 + dy ** 2)
-        # Apply minimum distance threshold for black hole interactions
-        r = max(r, MIN_BLACK_HOLE_DISTANCE)
-        force = G * black_hole.mass / (r ** 2)
-        total_fx += force * dx / r
-        total_fy += force * dy / r
-    
-    return total_fx, total_fy
+def compute_gravitational_force(p1: Particle, p2: Particle) -> tuple[float, float]:
+    """Compute gravitational force between two particles."""
+    dx = p2.x - p1.x
+    dy = p2.y - p1.y
+    r = math.sqrt(dx ** 2 + dy ** 2)
+    # Apply minimum distance threshold for particle interactions
+    r = max(r, MIN_PARTICLE_DISTANCE)
+    force = G * p1.mass * p2.mass / (r ** 2)
+    return force * dx / r, force * dy / r
 
 def check_collision(p1: Particle, p2: Particle) -> bool:
     dx = p2.x - p1.x
@@ -276,8 +229,8 @@ def handle_collision(p1: Particle, p2: Particle) -> None:
     if vn > 0:
         return
         
-    # Collision impulse
-    j = -(1 + BOUNCE_DAMPING) * vn
+    # Collision impulse (perfectly elastic)
+    j = -2 * vn  # coefficient of restitution = 1 for perfectly elastic collisions
     j /= 1/p1.mass + 1/p2.mass
     
     # Apply impulse
@@ -295,9 +248,6 @@ def main():
     pygame.display.set_caption("Gravitational Particles Simulation")
     clock = pygame.time.Clock()
     
-    # Create black hole at center of screen
-    black_hole = BlackHole(WIDTH // 2, HEIGHT // 2)
-    currently_captured = 0
     show_quadtree = False  # Toggle for quadtree visualization
     
     # Initialize font for FPS counter
@@ -309,19 +259,12 @@ def main():
     # Initialize particles
     particles = []
     for _ in range(PARTICLE_COUNT):
-        # Create particles avoiding the black hole area
-        while True:
-            x = random.randint(PARTICLE_RADIUS, WIDTH - PARTICLE_RADIUS)
-            y = random.randint(PARTICLE_RADIUS, HEIGHT - PARTICLE_RADIUS)
-            dx = x - black_hole.x
-            dy = y - black_hole.y
-            distance = math.sqrt(dx ** 2 + dy ** 2)
-            if distance > BLACK_HOLE_RADIUS * 3:  # Keep particles away from black hole initially
-                break
+        x = random.randint(PARTICLE_RADIUS, WIDTH - PARTICLE_RADIUS)
+        y = random.randint(PARTICLE_RADIUS, HEIGHT - PARTICLE_RADIUS)
         
-        # Give particles initial orbital velocity
-        angle = math.atan2(dy, dx) + math.pi/2  # Perpendicular to radius
-        speed = math.sqrt(G * black_hole.mass / distance) * 0.7  # 70% of escape velocity
+        # Random velocity
+        angle = random.uniform(0, 2 * math.pi)
+        speed = random.uniform(0.5, 1.5) * PARTICLE_SPEED
         vx = speed * math.cos(angle)
         vy = speed * math.sin(angle)
         
@@ -341,8 +284,7 @@ def main():
                 elif event.key == pygame.K_SPACE:  # Press SPACE to toggle quadtree visualization
                     show_quadtree = not show_quadtree
 
-        # Reset current capture count and rebuild quadtree
-        currently_captured = 0
+        # Build quadtree
         quad_tree = QuadTree(0, 0, WIDTH, HEIGHT)
         for p in particles:
             quad_tree.insert(p)
@@ -353,25 +295,11 @@ def main():
 
         # Update forces using Barnes-Hut algorithm
         for p in particles:
-            # Check if particle is captured by black hole
-            dx = p.x - black_hole.x
-            dy = p.y - black_hole.y
-            distance = math.sqrt(dx * dx + dy * dy)
-            
-            if distance <= BLACK_HOLE_RADIUS:
-                currently_captured += 1
-
-            # Force from black hole
-            fx, fy = compute_gravitational_force(p, None, black_hole)
-            
             # Forces from other particles using quadtree
-            tree_fx, tree_fy = quad_tree.compute_force(p)
+            fx, fy = quad_tree.compute_force(p)
             
-            # Apply combined forces
-            p.apply_force(fx + tree_fx, fy + tree_fy)
-
-        # Draw black hole first (background layer)
-        black_hole.draw(screen)
+            # Apply forces
+            p.apply_force(fx, fy)
 
         # Update positions and handle collisions
         for p in particles:
@@ -392,19 +320,17 @@ def main():
         # Calculate total system energy
         total_energy = sum(p.get_kinetic_energy() for p in particles)
         
-        # Draw FPS, particle count, energy, and capture counts
+        # Draw FPS, particle count, and energy
         fps = int(clock.get_fps())
         fps_text = font.render(f'FPS: {fps}', True, YELLOW)
         count_text = font.render(f'Particles: {len(particles)}', True, YELLOW)
         energy_text = font.render(f'TKEnergy: {total_energy:.1f}', True, YELLOW)
-        captured_text = font.render(f'Captured: {currently_captured}', True, YELLOW)
         quadtree_text = font.render('Press SPACE to toggle QuadTree view', True, YELLOW)
         
         screen.blit(fps_text, (10, 10))
         screen.blit(count_text, (10, 50))    
-        screen.blit(captured_text, (10, 90))
-        screen.blit(energy_text, (10, 130))
-        screen.blit(quadtree_text, (10, 170))
+        screen.blit(energy_text, (10, 90))
+        screen.blit(quadtree_text, (10, 130))
 
         pygame.display.flip()
         clock.tick(60)
